@@ -1,55 +1,58 @@
 import streamlit as st
 import yfinance as yf
-import pandas as pd
+import numpy as np
 from datetime import datetime
 
 st.set_page_config(page_title="Supertrend 三線共振", layout="centered")
-st.title("Supertrend 三線共振系統")
-st.markdown("0050 / 標普500 / QQQ • 即時更新")
+st.title("Supertrend 三線共振神器")
+st.markdown("**0050．標普500．QQQ｜手機專用｜永不卡版**")
 
-def get_supertrend(ticker, period, multiplier):
+@st.cache_data(ttl=600)
+def calc(ticker, atr_p, mult):
     try:
-        df = yf.download(ticker, period="400d", progress=False, auto_adjust=True)
-        if len(df) < 50: return False, 0
-        high, low, close = df['High'], df['Low'], df['Close']
-        tr = pd.concat([high-low, abs(high-close.shift()), abs(low-close.shift())], axis=1).max(axis=1)
-        atr = tr.ewm(alpha=1/period, adjust=False).mean()
-        hl2 = (high + low)/2
-        upper = hl2 + multiplier*atr
-        lower = hl2 - multiplier*atr
-        trend = [True]
-        for i in range(1,len(df)):
-            curr = close.iloc[i]
-            if curr > upper.iloc[i-1]: t = True
-            elif curr < lower.iloc[i-1]: t = False
-            else: 
-                t = trend[-1]
-                if t: lower.iloc[i] = max(lower.iloc[i], lower.iloc[i-1])
-                else: upper.iloc[i] = min(upper.iloc[i], upper.iloc[i-1])
-            trend.append(t)
-        return trend[-1], round(close.iloc[-1], 2)
-    except: return None, 0
+        df = yf.download(ticker, period="400d", progress=False, threads=False)
+        if len(df)<50: return False, 0
+        h,l,c = df.High.values, df.Low.values, df.Close.values
+        tr = np.maximum.reduce([h-l, np.abs(h-np.roll(c,1)), np.abs(l-np.roll(c,1))])
+        tr[0] = h[0]-l[0]
+        atr = np.zeros_like(c)
+        atr[0] = tr[:atr_p].mean()
+        for i in range(1,len(c)): 
+            atr[i] = (atr[i-1]*(atr_p-1) + tr[i]) / atr_p
+        up = (h+l)/2 + mult*atr
+        dn = (h+l)/2 - mult*atr
+        trend = np.full(len(c), True)
+        for i in range(1,len(c)):
+            if c[i] > up[i-1]: trend[i] = True
+            elif c[i] < dn[i-1]: trend[i] = False
+            else:
+                trend[i] = trend[i-1]
+                if trend[i]: dn[i] = max(dn[i], dn[i-1])
+                else: up[i] = min(up[i], up[i-1])
+        return trend[-1], round(c[-1],2)
+    except:
+        return None, 0
 
 symbols = {"0050 元大台灣50":"0050.TW", "標普500指數":"^GSPC", "QQQ 納斯達克100":"QQQ"}
 
-for name, t in symbols.items():
+for name,t in symbols.items():
     with st.container(border=True):
-        c1, c2 = st.columns([2,1])
-        c1.subheader(name)
-        s1, price = get_supertrend(t,11,2.0)
+        a,b = st.columns([2,1])
+        a.subheader(name)
+        s1,p = calc(t,11,2.0)
+        s2,_ = calc(t,10,1.0)
+        s3,_ = calc(t,12,3.0)
         if s1 is None:
-            st.error("暫時抓不到資料")
+            st.error("暫無資料，5分鐘後重試")
             continue
-        s2, _ = get_supertrend(t,10,1.0)
-        s3, _ = get_supertrend(t,12,3.0)
-        green = sum([s1, s2, s3])
-        c2.metric("現價", price)
-        st.write(f"標準線 (11,2.0) → {'上' if s1 else '下'}")
-        st.write(f"敏感線 (10,1.0) → {'上' if s2 else '下'}")
-        st.write(f"保守線 (12,3.0) → {'上' if s3 else '下'}")
-        if green==3: st.success("3/3 全綠 → 強多頭")
-        elif green==2: st.info("2/3 綠 → 多頭可進")
-        elif green==1: st.warning("1/3 綠 → 震盪觀望")
-        else: st.error("0/3 → 空頭注意")
+        green = sum([s1,s2,s3])
+        b.metric("現價",f"{p:,}")
+        st.write(f"標準(11,2.0) → {'上' if s1 else '下'}")
+        st.write(f"敏感(10,1.0) → {'上' if s2 else '下'}")
+        st.write(f"保守(12,3.0) → {'上' if s3 else '下'}")
+        if green==3: st.success(f"{green}/3 全綠 → 強多頭")
+        elif green==2: st.info(f"{green}/3 → 多頭可進")
+        elif green==1: st.warning(f"{green}/3 → 震盪觀望")
+        else: st.error(f"{green}/3 → 空頭")
 
 st.caption(f"更新時間：{datetime.now().strftime('%Y-%m-%d %H:%M')} 臺北時間")
